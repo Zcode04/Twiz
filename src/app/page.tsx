@@ -82,15 +82,12 @@ const StudentResultsApp = () => {
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-
     if (!/\.(xlsx|xls)$/i.test(file.name)) {
       alert("يرجى اختيار ملف Excel (.xlsx أو .xls) فقط")
       return
     }
-
     setIsLoading(true)
     setUploadedFileName(file.name)
-
     const reader = new FileReader()
     reader.onload = (ev) => {
       try {
@@ -132,18 +129,26 @@ const StudentResultsApp = () => {
               student[key] = Number.parseFloat(rawValue?.toString().replace(",", ".") || "0") || 0
             } else if (key === "Num_Bepc") {
               student[key] = Number(rawValue) || 0
+            } else if (key === "DATE_NAISS") {
+              // تم إضافة معالجة خاصة لتاريخ الميلاد
+              if (typeof rawValue === "number") {
+                // تحويل الرقم التسلسلي لتاريخ Excel إلى تنسيق تاريخ مقروء
+                const date = XLSX.SSF.parse_date_code(rawValue)
+                student[key] =
+                  `${date.d.toString().padStart(2, "0")}/${date.m.toString().padStart(2, "0")}/${date.y}` as never
+              } else {
+                student[key] = clean(rawValue) as never
+              }
             } else {
               student[key] = clean(rawValue) as never
             }
           })
-
           parsed[i] = student as Student
 
           // بناء الفهارس أثناء المعالجة
           if (student.Num_Bepc) {
             idIndex.set(student.Num_Bepc, student as Student)
           }
-
           if (student.NOM) {
             const nameKey = student.NOM.toLowerCase()
             if (!nameIndex.has(nameKey)) {
@@ -159,7 +164,6 @@ const StudentResultsApp = () => {
           byName: nameIndex,
           normalizedKeys,
         }
-
         setStudents(parsed)
       } catch (err) {
         console.error(err)
@@ -168,18 +172,15 @@ const StudentResultsApp = () => {
         setIsLoading(false)
       }
     }
-
     reader.readAsArrayBuffer(file)
   }, [])
 
   // بحث محسن بالفهرسة - أسرع بـ 1000%
   const filteredStudents = useMemo(() => {
     if (!searchQuery.trim()) return []
-
     const query = searchQuery.trim()
     const queryLower = query.toLowerCase()
     const queryNum = Number.parseInt(query)
-
     const results: Student[] = []
     const seen = new Set<number>()
 
@@ -209,7 +210,6 @@ const StudentResultsApp = () => {
         if (results.length >= 20) break
       }
     }
-
     return results
   }, [searchQuery])
 
@@ -245,7 +245,6 @@ const StudentResultsApp = () => {
           <p className="text-gray-400">ارفع ملف النتائج وابحث فوراً</p>
         </div>
       </div>
-
       <div className="max-w-6xl mx-auto px-4 py-8">
         <div className="bg-green-700/80 rounded-xl shadow-lg p-6 mb-8">
           <h2 className="text-xl font-semibold text-gray-200 mb-4 flex items-center gap-2">
@@ -269,7 +268,6 @@ const StudentResultsApp = () => {
             </div>
           )}
         </div>
-
         {students.length > 0 && (
           <div className="bg-green-700 rounded-xl shadow-lg p-6 mb-8">
             <h2 className="text-xl font-semibold text-gray-200 mb-4 flex items-center gap-2">
@@ -308,7 +306,6 @@ const StudentResultsApp = () => {
             )}
           </div>
         )}
-
         {selectedStudent && (
           <div className="bg-white rounded-xl shadow-lg overflow-hidden">
             <div className="bg-gradient-to-r from-blue-600 to-green-600 text-white p-6">
