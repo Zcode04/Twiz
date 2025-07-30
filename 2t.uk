@@ -1,0 +1,143 @@
+
+import { NextRequest, NextResponse } from 'next/server';
+import * as XLSX from 'xlsx';
+import { supabaseAdmin } from '@/lib/supabase/admin';
+import { StudentResult } from '@/lib/types';
+
+export const runtime = 'edge';
+
+export async function POST(request: NextRequest) {
+  try {
+    const formData = await request.formData();
+    const file = formData.get('file') as File;
+    const uploaderName = formData.get('uploader_name') as string;
+
+    if (!file || !uploaderName) {
+      return NextResponse.json({
+        success: false,
+        message: 'الملف واسم الرافع مطلوبان'
+      }, { status: 400 });
+    }
+
+    // Read the Excel file
+    const arrayBuffer = await file.arrayBuffer();
+    const workbook = XLSX.read(arrayBuffer);
+    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+    if (!jsonData || jsonData.length < 2) {
+      return NextResponse.json({
+        success: false,
+        message: 'الملف فارغ أو لا يحتوي على بيانات صحيحة'
+      }, { status: 400 });
+    }
+
+    // Process the data
+    const headers = jsonData[0] as string[];
+    const students: StudentResult[] = [];
+
+    for (let i = 1; i < jsonData.length; i++) {
+      const row = jsonData[i] as any[];
+      
+      if (!row || row.length < 4) continue;
+
+      const nationalId = String(row[0] || '').trim();
+      const studentName = String(row[1] || '').trim();
+      const totalScore = Number(row[2]) || 0;
+      const maxScore = Number(row[3]) || 100;
+
+      if (!nationalId || !studentName) continue;
+
+      const percentage = Math.round((totalScore / maxScore) * 100);
+      const status = percentage >= 50 ? 'نجح' : 'راسب';
+
+      // Process subjects if available
+      const subjects: { [key: string]: number } = {};
+      for (let j = 4; j < row.length && j < headers.length; j++) {
+        if (headers[j] && row[j] !== undefined && row[j] !== '') {
+          subjects[headers[j]] = Number(row[j]) || 0;
+        }
+      }
+
+      students.push({
+        national_id: nationalId,
+        student_name: studentName,
+        total_score: totalScore,
+        max_score: maxScore,
+        percentage,
+        status,
+        subjects: Object.keys(subjects).length > 0 ? subjects : undefined
+      });
+    }
+
+    if (students.length === 0) {
+      return NextResponse.json({
+        success: false,
+        message: 'لم يتم العثور على بيانات صحيحة في الملف'
+      }, { status: 400 });
+    }
+
+    // Create file record
+    const { data: fileRecord, error: fileError } = await supabaseAdmin
+      .from('uploaded_files')
+      .insert({
+        file_name: file.name,
+        uploader_name: uploaderName,
+        total_students: students.length,
+        passed_students: students.filter(s => s.status === 'نجح').length,
+        failed_students: students.filter(s => s.status === 'راسب').length
+      })
+      .select()
+      .single();
+
+    if (fileError) {
+      console.error('File insert error:', fileError);
+      return NextResponse.json({
+        success: false,
+        message: 'حدث خطأ أثناء حفظ معلومات الملف'
+      }, { status: 500 });
+    }
+
+    // Add file_id to students
+    const studentsWithFileId = students.map(student => ({
+      ...student,
+      file_id: fileRecord.id
+    }));
+
+    // Insert students data
+    const { error: studentsError } = await supabaseAdmin
+      .from('student_results')
+      .insert(studentsWithFileId);
+
+    if (studentsError) {
+      console.error('Students insert error:', studentsError);
+      
+      // Try to delete the file record if students insert failed
+      await supabaseAdmin
+        .from('uploaded_files')
+        .delete()
+        .eq('id', fileRecord.id);
+
+      return NextResponse.json({
+        success: false,
+        message: 'حدث خطأ أثناء حفظ بيانات الطلاب'
+      }, { status: 500 });
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: 'تم رفع الملف بنجاح',
+      file_id: fileRecord.id,
+      total_processed: students.length
+    });
+
+  } catch (error) {
+    console.error('Upload API error:', error);
+    return NextResponse.json({
+      success: false,
+      message: 'حدث خطأ أثناء معالجة الملف'
+    }, { status: 500 });
+  }
+}
+
+
