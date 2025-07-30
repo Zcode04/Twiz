@@ -15,7 +15,7 @@ import {
   CheckCircle,
   XCircle,
 } from "lucide-react"
-import { supabase } from "@/lib/supabase/client" // <--- تأكد من المسار الصحيح
+import { supabase } from "@/lib/supabase/client"
 
 interface Student {
   Num_Bepc: number
@@ -69,6 +69,8 @@ const StudentResultsApp = () => {
   const [isLoading, setIsLoading] = useState(false)
   const [uploadedFileName, setUploadedFileName] = useState("")
   const [isSavingToDb, setIsSavingToDb] = useState(false)
+  // حالة جديدة للتحكم في الحفظ إلى Supabase
+  const [saveToSupabase, setSaveToSupabase] = useState(true) // <--- افتراضياً، يتم الحفظ
 
   const searchIndexRef = useRef<{
     byId: Map<number, Student>
@@ -76,118 +78,132 @@ const StudentResultsApp = () => {
     normalizedKeys: string[]
   }>({ byId: new Map(), byName: new Map(), normalizedKeys: [] })
 
-  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    if (!/\.(xlsx|xls)$/i.test(file.name)) {
-      alert("يرجى اختيار ملف Excel (.xlsx أو .xls) فقط")
-      return
-    }
-    setIsLoading(true)
-    setUploadedFileName(file.name)
-    const reader = new FileReader()
-    reader.onload = async (ev) => {
-      try {
-        const data = new Uint8Array(ev.target?.result as ArrayBuffer)
-        const wb = XLSX.read(data, { type: "array", cellDates: false, cellText: false })
-        const ws = wb.Sheets[wb.SheetNames[0]]
-        const json: Record<string, unknown>[] = XLSX.utils.sheet_to_json(ws, { defval: "" })
+  const handleFileUpload = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      if (!file) return
+      if (!/\.(xlsx|xls)$/i.test(file.name)) {
+        alert("يرجى اختيار ملف Excel (.xlsx أو .xls) فقط")
+        return
+      }
+      setIsLoading(true)
+      setUploadedFileName(file.name)
+      const reader = new FileReader()
+      reader.onload = async (ev) => {
+        try {
+          const data = new Uint8Array(ev.target?.result as ArrayBuffer)
+          const wb = XLSX.read(data, { type: "array", cellDates: false, cellText: false })
+          const ws = wb.Sheets[wb.SheetNames[0]]
+          const json: Record<string, unknown>[] = XLSX.utils.sheet_to_json(ws, { defval: "" })
 
-        const firstRow = json[0]
-        const normalizedKeys = Object.keys(firstRow).map(normalizeKey)
-        const keyIndexMap = new Map<keyof Student, number>()
-        ;(Object.keys(KEY_MAP) as Array<keyof Student>).forEach((studentKey) => {
-          const keySet = KEY_MAP[studentKey]
-          for (let i = 0; i < normalizedKeys.length; i++) {
-            if (keySet.has(normalizedKeys[i])) {
-              keyIndexMap.set(studentKey, i)
-              break
+          const firstRow = json[0]
+          const normalizedKeys = Object.keys(firstRow).map(normalizeKey)
+          const keyIndexMap = new Map<keyof Student, number>()
+          ;(Object.keys(KEY_MAP) as Array<keyof Student>).forEach((studentKey) => {
+            const keySet = KEY_MAP[studentKey]
+            for (let i = 0; i < normalizedKeys.length; i++) {
+              if (keySet.has(normalizedKeys[i])) {
+                keyIndexMap.set(studentKey, i)
+                break
+              }
             }
-          }
-        })
+          })
 
-        const originalKeys = Object.keys(firstRow)
-        const parsed: Student[] = new Array(json.length)
-        const idIndex = new Map<number, Student>()
-        const nameIndex = new Map<string, Student[]>()
+          const originalKeys = Object.keys(firstRow)
+          const parsed: Student[] = new Array(json.length)
+          const idIndex = new Map<number, Student>()
+          const nameIndex = new Map<string, Student[]>()
 
-        for (let i = 0; i < json.length; i++) {
-          const row = json[i]
-          const student: Partial<Student> = {}
+          for (let i = 0; i < json.length; i++) {
+            const row = json[i]
+            const student: Partial<Student> = {}
 
-          keyIndexMap.forEach((index, key) => {
-            const rawValue = row[originalKeys[index]]
-            if (key === "Moyenne_Bepc") {
-              student[key] = Number.parseFloat(rawValue?.toString().replace(",", ".") || "0") || 0
-            } else if (key === "Num_Bepc") {
-              student[key] = Number(rawValue) || 0
-            } else if (key === "DATE_NAISS") {
-              if (typeof rawValue === "number") {
-                const date = XLSX.SSF.parse_date_code(rawValue)
-                student[key] =
-                  `${date.d.toString().padStart(2, "0")}/${date.m.toString().padStart(2, "0")}/${date.y}` as never
+            keyIndexMap.forEach((index, key) => {
+              const rawValue = row[originalKeys[index]]
+              if (key === "Moyenne_Bepc") {
+                student[key] = Number.parseFloat(rawValue?.toString().replace(",", ".") || "0") || 0
+              } else if (key === "Num_Bepc") {
+                student[key] = Number(rawValue) || 0
+              } else if (key === "DATE_NAISS") {
+                if (typeof rawValue === "number") {
+                  const date = XLSX.SSF.parse_date_code(rawValue)
+                  student[key] =
+                    `${date.d.toString().padStart(2, "0")}/${date.m.toString().padStart(2, "0")}/${date.y}` as never
+                } else {
+                  student[key] = clean(rawValue) as never
+                }
               } else {
                 student[key] = clean(rawValue) as never
               }
-            } else {
-              student[key] = clean(rawValue) as never
+            })
+            parsed[i] = student as Student
+
+            if (student.Num_Bepc) {
+              idIndex.set(student.Num_Bepc, student as Student)
             }
-          })
-          parsed[i] = student as Student
-
-          if (student.Num_Bepc) {
-            idIndex.set(student.Num_Bepc, student as Student)
-          }
-          if (student.NOM) {
-            const nameKey = student.NOM.toLowerCase()
-            if (!nameIndex.has(nameKey)) {
-              nameIndex.set(nameKey, [])
+            if (student.NOM) {
+              const nameKey = student.NOM.toLowerCase()
+              if (!nameIndex.has(nameKey)) {
+                nameIndex.set(nameKey, [])
+              }
+              nameIndex.get(nameKey)!.push(student as Student)
             }
-            nameIndex.get(nameKey)!.push(student as Student)
           }
-        }
 
-        searchIndexRef.current = {
-          byId: idIndex,
-          byName: nameIndex,
-          normalizedKeys,
-        }
-        setStudents(parsed)
-
-        setIsSavingToDb(true)
-        try {
-          const BATCH_SIZE = 1000
-          for (let i = 0; i < parsed.length; i += BATCH_SIZE) {
-            const batch = parsed.slice(i, i + BATCH_SIZE).map((s) => ({
-              num_bepc: s.Num_Bepc,
-              nom: s.NOM,
-              lieu_naiss: s.LIEU_NAISS,
-              date_naiss: s.DATE_NAISS,
-              wilaya: s.WILAYA,
-              ecole: s.Ecole,
-              centre: s.Centre,
-              moyenne_bepc: s.Moyenne_Bepc,
-              decision: s.Decision,
-            }))
-            const { error: insertError } = await supabase.from("students_data").insert(batch)
-            if (insertError) throw insertError
+          searchIndexRef.current = {
+            byId: idIndex,
+            byName: nameIndex,
+            normalizedKeys,
           }
-          console.log("Data successfully saved to Supabase!")
-        } catch (dbError) {
-          console.error("Error saving data to Supabase:", dbError)
-          alert("حدث خطأ أثناء حفظ البيانات في قاعدة البيانات.")
+          setStudents(parsed) // تحديث حالة الطلاب أولاً (للاستجابة الفورية)
+
+          // --- بدء عملية الحفظ إلى Supabase في الخلفية (إذا كان الخيار مفعلاً) ---
+          if (saveToSupabase) {
+            // <--- الشرط الجديد هنا
+            setIsSavingToDb(true)
+            try {
+              // يمكنك إضافة منطق الحذف هنا إذا كنت تريد استبدال البيانات القديمة
+              // const { error: deleteError } = await supabase.from('students_data').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+              // if (deleteError) throw deleteError;
+
+              const BATCH_SIZE = 1000
+              for (let i = 0; i < parsed.length; i += BATCH_SIZE) {
+                const batch = parsed.slice(i, i + BATCH_SIZE).map((s) => ({
+                  num_bepc: s.Num_Bepc,
+                  nom: s.NOM,
+                  lieu_naiss: s.LIEU_NAISS,
+                  date_naiss: s.DATE_NAISS,
+                  wilaya: s.WILAYA,
+                  ecole: s.Ecole,
+                  centre: s.Centre,
+                  moyenne_bepc: s.Moyenne_Bepc,
+                  decision: s.Decision,
+                }))
+                const { error: insertError } = await supabase.from("students_data").insert(batch)
+                if (insertError) throw insertError
+              }
+              console.log("Data successfully saved to Supabase!")
+            } catch (dbError) {
+              console.error("Error saving data to Supabase:", dbError)
+              alert("حدث خطأ أثناء حفظ البيانات في قاعدة البيانات.")
+            } finally {
+              setIsSavingToDb(false)
+            }
+          } else {
+            console.log("Saving to Supabase skipped by user preference.")
+          }
+          // --- نهاية عملية الحفظ إلى Supabase ---
+        } catch (err) {
+          console.error(err)
+          alert("خطأ في قراءة الملف، تأكد من التنسيق.")
         } finally {
-          setIsSavingToDb(false)
+          setIsLoading(false)
         }
-      } catch (err) {
-        console.error(err)
-        alert("خطأ في قراءة الملف، تأكد من التنسيق.")
-      } finally {
-        setIsLoading(false)
       }
-    }
-    reader.readAsArrayBuffer(file)
-  }, [])
+      reader.readAsArrayBuffer(file)
+    },
+    [saveToSupabase],
+  ) // <--- إضافة saveToSupabase كاعتماد لـ useCallback
 
   const filteredStudents = useMemo(() => {
     if (!searchQuery.trim()) return []
@@ -270,15 +286,29 @@ const StudentResultsApp = () => {
             </label>
             {uploadedFileName && <p className="mt-2 text-sm text-green-200">تم رفع: {uploadedFileName}</p>}
           </div>
+          {/* مربع اختيار جديد للتحكم في الحفظ إلى Supabase */}
+          <div className="mt-4 flex items-center justify-center gap-2">
+            <input
+              type="checkbox"
+              id="saveToSupabase"
+              checked={saveToSupabase}
+              onChange={(e) => setSaveToSupabase(e.target.checked)}
+              className="form-checkbox h-5 w-5 text-green-600 rounded"
+            />
+            <label htmlFor="saveToSupabase" className="text-gray-200 cursor-pointer">
+              حفظ البيانات في قاعدة البيانات (Supabase)
+            </label>
+          </div>
+
           {isLoading && (
             <div className="mt-4 flex items-center justify-center gap-2 text-blue-200">
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-50"></div>
               <span>جاري معالجة الملف...</span>
             </div>
           )}
           {isSavingToDb && (
             <div className="mt-2 flex items-center justify-center gap-2 text-blue-200">
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-50"></div>
               <span>جاري حفظ البيانات في قاعدة البيانات...</span>
             </div>
           )}
