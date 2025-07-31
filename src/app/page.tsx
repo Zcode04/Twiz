@@ -1,30 +1,21 @@
-import { createClient } from "@/utils/supabase/server";
-import StudentResultsApp from "@/components/student-results-app";
+"use client"
 
-// تحديد نوع للبيانات التي تتوقعها من قاعدة البيانات
-interface Student {
-  id: number;
-  name: string;
-  // أضف الحقول الأخرى التي تتوقعها هنا
-}
+import FileUploadSection from "@/components/file-upload-section"
+import GeneralStatisticsDisplay from "@/components/general-statistics-display"
+import { useStudentData } from "@/components/student-data-provider"
 
-export default async function HomePage() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+export default function HomePage() {
+  const { students, processing, handleFileUpload, user } = useStudentData()
 
-  // تحميل بيانات المستخدم إذا كان مسجلًا
-  let savedStudents: Student[] = [];
-
-  if (user) {
-    const { data, error } = await supabase
-      .from("students_data")
-      .select("*")
-      .eq("user_id", user.id);
-
-    if (!error) {
-      savedStudents = data || [];
-    }
-  }
-
-  return <StudentResultsApp user={user} />;
+  return (
+    <div className="bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl p-6 mb-8 border border-white/20">
+      <FileUploadSection
+        processing={processing}
+        handleFileUpload={handleFileUpload}
+        user={user}
+        studentsCount={students.length}
+      />
+      <GeneralStatisticsDisplay students={students} />
+    </div>
+  )
 }

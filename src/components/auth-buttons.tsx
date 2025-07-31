@@ -1,4 +1,5 @@
 "use client"
+
 import type { User } from "@supabase/supabase-js"
 import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase-browser"
@@ -16,7 +17,7 @@ export default function AuthButtons({ user }: { user: User | null }) {
 
   const signOut = async () => {
     await supabase.auth.signOut()
-    router.refresh()            // يجبر Server Component على إعادة التشغيل
+    router.refresh() // يجبر Server Component على إعادة التشغيل
   }
 
   return user ? (

@@ -1,0 +1,883 @@
+"use client"
+import type React from "react"
+import { useState, useEffect, useMemo, useRef, useCallback } from "react"
+import * as XLSX from "xlsx"
+import Link from "next/link" // Added Link import
+import { usePathname } from "next/navigation" // Added usePathname import
+import {
+  Upload,
+  Search,
+  UserIcon,
+  MapPin,
+  Calendar,
+  School,
+  CheckCircle,
+  XCircle,
+  FileText,
+  Loader2,
+  Home,
+  MessageSquare,
+  User,
+} from "lucide-react"
+import { createClient } from "@/lib/supabase-browser"
+import type { User as SupabaseUser } from "@supabase/supabase-js"
+import { Button } from "@/components/ui/button" // Added Button import
+import { cn } from "@/lib/utils" // Added cn import
+
+interface Student {
+  Num_Bepc: number
+  NOM: string
+  LIEU_NAISS: string
+  DATE_NAISS: string
+  WILAYA: string
+  Ecole: string
+  Centre: string
+  Moyenne_Bepc: number
+  Decision: string
+}
+
+interface ProcessingState {
+  isProcessing: boolean
+  stage: "reading" | "parsing" | "indexing" | "saving" | "complete"
+  progress: number
+  message: string
+}
+
+// تحسين دالة التنظيف
+const clean = (txt: unknown): string => {
+  if (txt == null) return ""
+  const str = String(txt).trim()
+  return str.length > 50 ? `${str.substring(0, 50)}...` : str
+}
+
+// تحسين دالة تطبيع المفاتيح مع ذاكرة تخزين مؤقت
+const normalizeKey = (() => {
+  const cache = new Map<string, string>()
+  return (k: string): string => {
+    if (cache.has(k)) return cache.get(k)!
+    const normalized = String(k)
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+    cache.set(k, normalized)
+    return normalized
+  }
+})()
+
+// خريطة المفاتيح المحسنة
+const KEY_MAP: Record<keyof Student, Set<string>> = {
+  Num_Bepc: new Set(["num_bepc", "رقم_الطالب", "رقم", "code", "id", "numero", "number"]),
+  NOM: new Set(["nom", "الاسم", "اسم_الطالب", "name", "student_name", "full_name"]),
+  LIEU_NAISS: new Set(["lieu_naiss", "lieu_nais", "مكان_الميلاد", "مكان_الولادة", "birth_place", "place_of_birth"]),
+  DATE_NAISS: new Set(["date_naiss", "تاريخ_الميلاد", "تاريخ_الولادة", "dob", "birth_date", "date_of_birth"]),
+  WILAYA: new Set(["wilaya", "الولاية", "province", "state", "region"]),
+  Ecole: new Set(["ecole", "المدرسة", "school", "institution", "etablissement"]),
+  Centre: new Set(["centre", "المركز", "center", "exam_center", "centre_examen"]),
+  Moyenne_Bepc: new Set(["moyenne_bepc", "المعدل", "moyenne", "average", "grade", "score", "note"]),
+  Decision: new Set(["decision", "القرار", "result", "status", "resultat", "outcome"]),
+}
+
+// مؤشر البحث المحسن
+class SearchIndex {
+  private byId = new Map<number, Student>()
+  private byName = new Map<string, Student[]>()
+  private nameTokens = new Map<string, Set<number>>()
+
+  constructor(students: Student[]) {
+    this.buildIndex(students)
+  }
+
+  private buildIndex(students: Student[]) {
+    students.forEach((student) => {
+      // فهرسة بالرقم
+      if (student.Num_Bepc) {
+        this.byId.set(student.Num_Bepc, student)
+      }
+      // فهرسة بالاسم
+      const nameKey = student.NOM.toLowerCase()
+      if (!this.byName.has(nameKey)) {
+        this.byName.set(nameKey, [])
+      }
+      this.byName.get(nameKey)!.push(student)
+      // فهرسة الرموز المميزة للبحث السريع
+      const tokens = nameKey.split(/\s+/)
+      tokens.forEach((token) => {
+        if (token.length > 1) {
+          if (!this.nameTokens.has(token)) {
+            this.nameTokens.set(token, new Set())
+          }
+          this.nameTokens.get(token)!.add(student.Num_Bepc)
+        }
+      })
+    })
+  }
+
+  search(query: string): Student[] {
+    const qTrim = query.trim()
+    if (!qTrim) return []
+    const qLow = qTrim.toLowerCase()
+    const qNum = Number(qTrim)
+    const results = new Set<Student>()
+
+    // البحث بالرقم أولاً
+    if (!isNaN(qNum) && qNum !== 0) {
+      const student = this.byId.get(qNum)
+      if (student) results.add(student)
+    }
+
+    // البحث بالاسم
+    if (isNaN(qNum) || qNum === 0) {
+      // البحث في الرموز المميزة
+      for (const [token, ids] of this.nameTokens) {
+        if (token.includes(qLow)) {
+          ids.forEach((id) => {
+            const student = this.byId.get(id)
+            if (student) results.add(student)
+          })
+        }
+      }
+      // البحث في الأسماء الكاملة
+      for (const [name, students] of this.byName) {
+        if (name.includes(qLow)) {
+          students.forEach((student) => results.add(student))
+        }
+      }
+    }
+    return Array.from(results).slice(0, 20) // حد أقصى 20 نتيجة
+  }
+
+  getById(id: number): Student | null {
+    return this.byId.get(id) || null
+  }
+}
+
+type Props = { user: SupabaseUser | null }
+
+export default function StudentResultsApp({ user }: Props) {
+  const [students, setStudents] = useState<Student[]>([])
+  const [searchQuery, setSearchQuery] = useState("")
+  // Removed activeTab state, will use pathname directly
+  const [processing, setProcessing] = useState<ProcessingState>({
+    isProcessing: false,
+    stage: "reading",
+    progress: 0,
+    message: "",
+  })
+  const searchIndexRef = useRef<SearchIndex | null>(null)
+  const supabase = createClient()
+  const pathname = usePathname() // Get current pathname
+
+  // Define navigation items
+  const navItems = [
+    { href: "/", icon: Home, label: "الرئيسية" },
+    { href: "/search", icon: Search, label: "البحث" },
+    { href: "/profile", icon: User, label: "الملف الشخصي" },
+    { href: "/messages", icon: MessageSquare, label: "الرسائل" },
+  ]
+
+  // تحميل البيانات المحفوظة عند تسجيل الدخول
+  useEffect(() => {
+    if (!user) return
+    const loadUserData = async () => {
+      setProcessing({
+        isProcessing: true,
+        stage: "reading",
+        progress: 25,
+        message: "جاري تحميل البيانات المحفوظة...",
+      })
+      try {
+        const { data, error } = await supabase.from("students_data").select("*").eq("user_id", user.id)
+        if (error) throw error
+        if (data && data.length > 0) {
+          setProcessing((prev) => ({ ...prev, progress: 75, message: "جاري معالجة البيانات..." }))
+          const mappedStudents = data.map(
+            (d): Student => ({
+              Num_Bepc: d.num_bepc,
+              NOM: d.nom,
+              LIEU_NAISS: d.lieu_naiss,
+              DATE_NAISS: d.date_naiss,
+              WILAYA: d.wilaya,
+              Ecole: d.ecole,
+              Centre: d.centre,
+              Moyenne_Bepc: d.moyenne_bepc,
+              Decision: d.decision,
+            }),
+          )
+          setStudents(mappedStudents)
+          searchIndexRef.current = new SearchIndex(mappedStudents)
+          setProcessing({
+            isProcessing: false,
+            stage: "complete",
+            progress: 100,
+            message: `تم تحميل ${mappedStudents.length} طالب بنجاح`,
+          })
+          setTimeout(() => {
+            setProcessing((prev) => ({ ...prev, message: "" }))
+          }, 2000)
+        } else {
+          setProcessing({ isProcessing: false, stage: "complete", progress: 0, message: "" })
+        }
+      } catch (error) {
+        console.error("Error loading data:", error)
+        setProcessing({
+          isProcessing: false,
+          stage: "complete",
+          progress: 0,
+          message: "خطأ في تحميل البيانات",
+        })
+      }
+    }
+    loadUserData()
+  }, [user, supabase])
+
+  // معالجة رفع الملف المحسنة
+  const handleFileUpload = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0]
+      if (!file) return
+
+      // التحقق من نوع الملف
+      const validTypes = [
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+      ]
+      if (!validTypes.includes(file.type) && !file.name.match(/\.(xlsx|xls)$/i)) {
+        alert("يرجى اختيار ملف Excel صحيح (.xlsx أو .xls)")
+        return
+      }
+
+      setProcessing({
+        isProcessing: true,
+        stage: "reading",
+        progress: 10,
+        message: `جاري قراءة الملف: ${file.name}`,
+      })
+
+      try {
+        const arrayBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = (event) => {
+            if (event.target?.result) {
+              resolve(event.target.result as ArrayBuffer)
+            } else {
+              reject(new Error("فشل في قراءة الملف"))
+            }
+          }
+          reader.onerror = () => reject(new Error("خطأ في قراءة الملف"))
+          reader.readAsArrayBuffer(file)
+        })
+
+        setProcessing((prev) => ({
+          ...prev,
+          stage: "parsing",
+          progress: 30,
+          message: "جاري تحليل البيانات...",
+        }))
+
+        // معالجة الملف
+        const workbook = XLSX.read(new Uint8Array(arrayBuffer), {
+          type: "array",
+          cellDates: true,
+          cellNF: false,
+          cellText: false,
+        })
+
+        if (!workbook.SheetNames.length) {
+          throw new Error("الملف لا يحتوي على أوراق عمل")
+        }
+
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]]
+        const jsonData: Record<string, unknown>[] = XLSX.utils.sheet_to_json(worksheet, {
+          defval: "",
+          raw: false,
+          dateNF: "dd/mm/yyyy",
+        })
+
+        if (!jsonData.length) {
+          throw new Error("الملف فارغ أو لا يحتوي على بيانات")
+        }
+
+        setProcessing((prev) => ({
+          ...prev,
+          stage: "indexing",
+          progress: 50,
+          message: `جاري معالجة ${jsonData.length} سجل...`,
+        }))
+
+        // تحديد المفاتيح
+        const firstRow = jsonData[0]
+        const originalKeys = Object.keys(firstRow)
+        const normalizedKeys = originalKeys.map(normalizeKey)
+        const keyMapping = new Map<keyof Student, number>()
+
+        Object.entries(KEY_MAP).forEach(([targetKey, possibleKeys]) => {
+          for (let i = 0; i < normalizedKeys.length; i++) {
+            if (possibleKeys.has(normalizedKeys[i])) {
+              keyMapping.set(targetKey as keyof Student, i)
+              break
+            }
+          }
+        })
+
+        if (keyMapping.size === 0) {
+          throw new Error("لم يتم العثور على أعمدة مطابقة في الملف")
+        }
+
+        // معالجة البيانات بمجموعات صغيرة لتحسين الأداء
+        const batchSize = 1000
+        const processedStudents: Student[] = []
+
+        for (let i = 0; i < jsonData.length; i += batchSize) {
+          const batch = jsonData.slice(i, i + batchSize)
+          const batchStudents = batch
+            .map((row) => {
+              const student: Partial<Student> = {}
+
+              keyMapping.forEach((columnIndex, studentKey) => {
+                const rawValue = row[originalKeys[columnIndex]]
+
+                switch (studentKey) {
+                  case "Moyenne_Bepc":
+                    student[studentKey] = Number(String(rawValue).replace(",", ".")) || 0
+                    break
+                  case "Num_Bepc":
+                    student[studentKey] = Number(rawValue) || 0
+                    break
+                  default:
+                    student[studentKey] = clean(rawValue) as never
+                }
+              })
+              return student as Student
+            })
+            .filter((s) => s.Num_Bepc && s.NOM) // تصفية السجلات غير المكتملة
+          processedStudents.push(...batchStudents)
+
+          const progress = 50 + ((i + batch.length) / jsonData.length) * 30
+          setProcessing((prev) => ({
+            ...prev,
+            progress,
+            message: `تمت معالجة ${i + batch.length} من ${jsonData.length} سجل...`,
+          }))
+
+          // إعطاء المتصفح فرصة للتحديث
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+
+        if (processedStudents.length === 0) {
+          throw new Error("لم يتم العثور على بيانات صحيحة في الملف")
+        }
+
+        setProcessing((prev) => ({
+          ...prev,
+          progress: 85,
+          message: "جاري إنشاء فهرس البحث...",
+        }))
+
+        // إنشاء فهرس البحث
+        const searchIndex = new SearchIndex(processedStudents)
+        searchIndexRef.current = searchIndex
+        setStudents(processedStudents)
+
+        // حفظ في قاعدة البيانات إذا كان المستخدم مسجلاً
+        if (user) {
+          setProcessing((prev) => ({
+            ...prev,
+            stage: "saving",
+            progress: 90,
+            message: "جاري حفظ البيانات...",
+          }))
+          const dataToInsert = processedStudents.map((student) => ({
+            user_id: user.id,
+            num_bepc: student.Num_Bepc,
+            nom: student.NOM,
+            lieu_naiss: student.LIEU_NAISS,
+            date_naiss: student.DATE_NAISS,
+            wilaya: student.WILAYA,
+            ecole: student.Ecole,
+            centre: student.Centre,
+            moyenne_bepc: student.Moyenne_Bepc,
+            decision: student.Decision,
+          }))
+          // حفظ بمجموعات صغيرة لتجنب مشاكل الحد الأقصى
+          const saveBatchSize = 500
+          for (let i = 0; i < dataToInsert.length; i += saveBatchSize) {
+            const batch = dataToInsert.slice(i, i + saveBatchSize)
+            await supabase.from("students_data").upsert(batch, {
+              onConflict: "user_id,num_bepc",
+            })
+          }
+        }
+
+        setProcessing({
+          isProcessing: false,
+          stage: "complete",
+          progress: 100,
+          message: `تم تحميل ${processedStudents.length} طالب بنجاح!`,
+        })
+        setTimeout(() => {
+          setProcessing((prev) => ({ ...prev, message: "" }))
+        }, 3000)
+      } catch (error) {
+        console.error("Error processing file:", error)
+        setProcessing({
+          isProcessing: false,
+          stage: "complete",
+          progress: 0,
+          message: `خطأ: ${error instanceof Error ? error.message : "حدث خطأ غير متوقع"}`,
+        })
+      }
+      // إعادة تعيين input
+      e.target.value = ""
+    },
+    [user, supabase],
+  )
+
+  // البحث المحسن
+  const searchResults = useMemo(() => {
+    if (!searchIndexRef.current || !searchQuery.trim()) return []
+    return searchIndexRef.current.search(searchQuery)
+  }, [searchQuery])
+
+  const selectedStudent = useMemo(() => {
+    const qNum = Number(searchQuery.trim())
+    if (!searchIndexRef.current || isNaN(qNum)) return null
+    return searchIndexRef.current.getById(qNum)
+  }, [searchQuery])
+
+  // تمييز النص في نتائج البحث
+  const highlightText = (text: string, query: string) => {
+    if (!query.trim()) return text
+    const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi")
+    const parts = text.split(regex)
+    return (
+      <>
+        {parts.map((part, i) =>
+          regex.test(part) ? (
+            <mark key={i} className="bg-yellow-300 text-black rounded px-0.5">
+              {part}
+            </mark>
+          ) : (
+            <span key={i}>{part}</span>
+          ),
+        )}
+      </>
+    )
+  }
+
+  // محتوى رفع الملف (للصفحة الرئيسية)
+  const FileUploadContent = () => (
+    <div className="space-y-6">
+      <div className="border-2 border-dashed border-white/30 rounded-2xl p-8 text-center hover:border-white/50 transition-all duration-300 hover:bg-white/5">
+        <Upload className="w-16 h-16 text-white/70 mx-auto mb-4" />
+        <label className="cursor-pointer block">
+          <span className="text-lg font-medium text-white hover:text-blue-200 transition-colors">
+            {processing.isProcessing ? "جاري المعالجة..." : "ارفع الملف بصيغة"}
+          </span>
+          <input
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={handleFileUpload}
+            disabled={processing.isProcessing}
+            className="hidden"
+          />
+        </label>
+      </div>
+
+      {/* شريط التقدم */}
+      {processing.isProcessing && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between text-white/90">
+            <span>{processing.message}</span>
+            <span>{processing.progress}%</span>
+          </div>
+          <div className="w-full bg-white/20 rounded-full h-2 overflow-hidden">
+            <div
+              className="bg-gradient-to-r from-blue-200 to-green-400 h-full rounded-full transition-all duration-300 ease-out"
+              style={{ width: `${processing.progress}%` }}
+            />
+          </div>
+          <div className="flex items-center justify-center gap-2 text-white/70">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span className="text-sm">
+              {processing.stage === "reading" && "قراءة الملف..."}
+              {processing.stage === "parsing" && "تحليل البيانات..."}
+              {processing.stage === "indexing" && "إنشاء الفهرس..."}
+              {processing.stage === "saving" && "حفظ البيانات..."}
+            </span>
+          </div>
+        </div>
+      )}
+      {processing.message && !processing.isProcessing && (
+        <div className="p-3 bg-green-500/20 border border-green-500/30 rounded-lg">
+          <p className="text-green-200 text-center">{processing.message}</p>
+        </div>
+      )}
+      {!user && (
+        <div className="p-3 bg-yellow-500/20 border border-yellow-500/30 rounded-lg">
+          <p className="text-yellow-200 text-center">سجّل الدخول بحساب Google لحفظ بياناتك تلقائياً</p>
+        </div>
+      )}
+    </div>
+  )
+
+  // محتوى البحث
+  const SearchContent = () => (
+    <div className="space-y-6">
+      <div className="relative">
+        <Search className="absolute right-4 top-1/2 transform -translate-y-1/2 text-white/60 w-5 h-5" />
+        <input
+          type="text"
+          placeholder="أدخل رقم الطالب أو الاسم للبحث..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full pr-12 pl-4 py-4 bg-white/10 border border-white/30 rounded-xl focus:ring-2 focus:ring-blue-400 focus:border-transparent text-white placeholder-white/50 text-lg backdrop-blur-sm"
+          dir="rtl"
+        />
+      </div>
+      {/* نتائج البحث */}
+      {searchQuery.trim() && !selectedStudent && searchResults.length > 0 && (
+        <div className="mt-4 max-h-64 overflow-y-auto bg-white/95 rounded-xl shadow-lg border border-white/20">
+          {searchResults.map((student) => (
+            <button
+              key={student.Num_Bepc}
+              onClick={() => setSearchQuery(student.Num_Bepc.toString())}
+              className="w-full text-right px-4 py-3 hover:bg-blue-50 flex items-center justify-between border-b border-gray-100 last:border-b-0 transition-colors"
+            >
+              <div className="flex-1">
+                <p className="font-medium text-gray-900">{highlightText(student.NOM, searchQuery)}</p>
+                <p className="text-sm text-gray-500">{student.Ecole}</p>
+              </div>
+              <div className="text-sm text-gray-600 mr-4">
+                <span className="font-mono">{student.Num_Bepc}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+      {searchQuery.trim() && searchResults.length === 0 && !selectedStudent && (
+        <div className="mt-4 p-4 bg-red-500/20 border border-red-500/30 rounded-lg">
+          <p className="text-red-200 text-center">لم يتم العثور على نتائج</p>
+        </div>
+      )}
+    </div>
+  )
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-green-900">
+      {/* Navigation Bar */}
+      <nav className="sticky top-0 z-30 w-full bg-white/90 backdrop-blur-md shadow-lg">
+        <div className="max-w-6xl mx-auto px-4">
+          <div className="flex items-center justify-around py-4">
+            {navItems.map((item) => (
+              <Link key={item.href} href={item.href} passHref>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn(
+                    "flex h-10 w-10 flex-col items-center justify-center rounded-lg transition-all",
+                    pathname === item.href ? "bg-blue-100 text-blue-600" : "text-gray-600 hover:text-blue-600",
+                  )}
+                >
+                  <item.icon className="h-6 w-6" />
+                  <span className="sr-only">{item.label}</span>
+                </Button>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </nav>
+
+      <div className="max-w-6xl mx-auto px-4 py-8">
+        {/* المحتوى الرئيسي */}
+        <div className="bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl p-6 mb-8 border border-white/20">
+          {pathname === "/" && <FileUploadContent />}
+          {pathname === "/search" && students.length > 0 && <SearchContent />}
+          {pathname === "/profile" && (
+            <div className="text-center text-white">
+              <User className="w-16 h-16 mx-auto mb-4 text-white/70" />
+              <h3 className="text-xl font-bold mb-2">الملف الشخصي</h3>
+              <p className="text-white/70">قريباً...</p>
+            </div>
+          )}
+          {pathname === "/messages" && (
+            <div className="text-center text-white">
+              <MessageSquare className="w-16 h-16 mx-auto mb-4 text-white/70" />
+              <h3 className="text-xl font-bold mb-2">الرسائل</h3>
+              <p className="text-white/70">قريباً...</p>
+            </div>
+          )}
+          {pathname === "/search" && students.length === 0 && (
+            <div className="text-center text-white">
+              <Search className="w-16 h-16 mx-auto mb-4 text-white/70" />
+              <h3 className="text-xl font-bold mb-2">البحث</h3>
+              <p className="text-white/70">قم برفع ملف النتائج أولاً</p>
+            </div>
+          )}
+        </div>
+
+        {/* عرض تفاصيل الطالب */}
+        {selectedStudent && pathname === "/search" && (
+          <div className="bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-green-600 text-white p-8">
+              <div className="flex items-center gap-4">
+                <div className="bg-white/20 p-3 rounded-full">
+                  <UserIcon className="w-8 h-8" />
+                </div>
+                <div>
+                  <h2 className="text-3xl font-bold mb-1">{selectedStudent.NOM}</h2>
+                  <p className="text-white/90 text-lg">رقم الطالب: {selectedStudent.Num_Bepc}</p>
+                  <p className="text-white/70">{selectedStudent.WILAYA}</p>
+                </div>
+              </div>
+            </div>
+            <div className="p-8">
+              <div className="grid lg:grid-cols-3 gap-8">
+                {/* المعلومات الشخصية */}
+                <div className="space-y-6">
+                  <h3 className="text-xl font-bold text-gray-900 border-b-2 border-blue-200 pb-2">المعلومات الشخصية</h3>
+                  <div className="space-y-4">
+                    <div className="flex items-start gap-3 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-100">
+                      <Calendar className="w-5 h-5 text-blue-600 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-medium text-gray-600">تاريخ الميلاد</p>
+                        <p className="text-lg font-semibold text-gray-900">{selectedStudent.DATE_NAISS}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3 p-4 bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl border border-purple-100">
+                      <MapPin className="w-5 h-5 text-purple-600 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-medium text-gray-600">مكان الميلاد</p>
+                        <p className="text-lg font-semibold text-gray-900">{selectedStudent.LIEU_NAISS}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {/* المعلومات الأكاديمية */}
+                <div className="space-y-6">
+                  <h3 className="text-xl font-bold text-gray-900 border-b-2 border-green-200 pb-2">
+                    المعلومات الأكاديمية
+                  </h3>
+                  <div className="space-y-4">
+                    <div className="flex items-start gap-3 p-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-100">
+                      <School className="w-5 h-5 text-green-600 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-medium text-gray-600">المدرسة</p>
+                        <p className="text-lg font-semibold text-gray-900">{selectedStudent.Ecole}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3 p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl border border-amber-100">
+                      <MapPin className="w-5 h-5 text-amber-600 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-medium text-gray-600">مركز الامتحان</p>
+                        <p className="text-lg font-semibold text-gray-900">{selectedStudent.Centre}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {/* النتيجة */}
+                <div className="space-y-6">
+                  <h3 className="text-xl font-bold text-gray-900 border-b-2 border-yellow-200 pb-2">
+                    النتيجة النهائية
+                  </h3>
+                  <div className="bg-gradient-to-br from-blue-50 via-purple-50 to-green-50 rounded-2xl p-6 border-2 border-blue-200 shadow-lg">
+                    <div className="text-center space-y-4">
+                      <div>
+                        <p className="text-sm font-medium text-gray-600 mb-2">المعدل العام</p>
+                        <p className="text-5xl font-bold text-blue-600 mb-2">
+                          {selectedStudent.Moyenne_Bepc.toFixed(2)}
+                        </p>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div
+                            className="bg-gradient-to-r from-blue-400 to-green-400 h-2 rounded-full transition-all duration-1000 ease-out"
+                            style={{ width: `${Math.min((selectedStudent.Moyenne_Bepc / 20) * 100, 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-center gap-3">
+                        {selectedStudent.Decision.toLowerCase().includes("admis") ||
+                        selectedStudent.Decision.toLowerCase().includes("ناجح") ? (
+                          <>
+                            <div className="bg-green-100 p-2 rounded-full">
+                              <CheckCircle className="w-8 h-8 text-green-600" />
+                            </div>
+                            <div className="text-center">
+                              <p className="text-2xl font-bold text-green-600">ناجح</p>
+                              <p className="text-sm text-green-500">مبروك النجاح!</p>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="bg-red-100 p-2 rounded-full">
+                              <XCircle className="w-8 h-8 text-red-600" />
+                            </div>
+                            <div className="text-center">
+                              <p className="text-2xl font-bold text-red-600">راسب</p>
+                              <p className="text-sm text-red-500">حظ أوفر المرة القادمة</p>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* معلومات إضافية */}
+              <div className="mt-8 grid md:grid-cols-2 gap-6">
+                <div className="bg-gray-50 rounded-xl p-6">
+                  <h4 className="font-semibold text-gray-900 mb-4">تفاصيل إضافية</h4>
+                  <div className="space-y-3 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">الولاية:</span>
+                      <span className="font-medium">{selectedStudent.WILAYA}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">المركز:</span>
+                      <span className="font-medium">{selectedStudent.Centre}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">القرار:</span>
+                      <span
+                        className={cn(
+                          "font-medium",
+                          selectedStudent.Decision.toLowerCase().includes("admis") ||
+                            selectedStudent.Decision.toLowerCase().includes("ناجح")
+                            ? "text-green-600"
+                            : "text-red-600",
+                        )}
+                      >
+                        {selectedStudent.Decision}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6 border border-blue-100">
+                  <h4 className="font-semibold text-gray-900 mb-4">إحصائيات سريعة</h4>
+                  <div className="space-y-3 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">المعدل المطلوب:</span>
+                      <span className="font-medium">10.00</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">الفرق:</span>
+                      <span
+                        className={cn(
+                          "font-medium",
+                          selectedStudent.Moyenne_Bepc >= 10 ? "text-green-600" : "text-red-600",
+                        )}
+                      >
+                        {selectedStudent.Moyenne_Bepc >= 10 ? "+" : ""}
+                        {(selectedStudent.Moyenne_Bepc - 10).toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">النسبة المئوية:</span>
+                      <span className="font-medium">{((selectedStudent.Moyenne_Bepc / 20) * 100).toFixed(1)}%</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* زر مشاركة أو طباعة */}
+              <div className="mt-8 flex flex-wrap gap-4 justify-center">
+                <button
+                  onClick={() => window.print()}
+                  className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-3 rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all duration-300 font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-1"
+                >
+                  طباعة النتيجة
+                </button>
+                <button
+                  onClick={() => {
+                    const text = `نتيجة الطالب ${selectedStudent.NOM}\nرقم الطالب: ${selectedStudent.Num_Bepc}\nالمعدل: ${selectedStudent.Moyenne_Bepc}\nالنتيجة: ${selectedStudent.Decision}`
+                    navigator.clipboard.writeText(text).then(() => {
+                      alert("تم نسخ المعلومات!")
+                    })
+                  }}
+                  className="bg-gradient-to-r from-green-600 to-emerald-600 text-white px-6 py-3 rounded-xl hover:from-green-700 hover:to-emerald-700 transition-all duration-300 font-medium shadow-lg hover:shadow-xl transform hover:-translate-y-1"
+                >
+                  نسخ المعلومات
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* إحصائيات عامة */}
+        {students.length > 0 && !selectedStudent && pathname === "/" && (
+          <div className="grid md:grid-cols-3 gap-6 mt-8">
+            <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 border border-white/20">
+              <div className="text-center">
+                <p className="text-3xl font-bold text-white mb-2">{students.length.toLocaleString("ar")}</p>
+                <p className="text-white/70">إجمالي الطلاب</p>
+              </div>
+            </div>
+            <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 border border-white/20">
+              <div className="text-center">
+                <p className="text-3xl font-bold text-green-400 mb-2">
+                  {students
+                    .filter(
+                      (s) =>
+                        s.Decision.toLowerCase().includes("admis") ||
+                        s.Decision.toLowerCase().includes("ناجح") ||
+                        s.Moyenne_Bepc >= 10,
+                    )
+                    .length.toLocaleString("ar")}
+                </p>
+                <p className="text-white/70">الناجحون</p>
+              </div>
+            </div>
+            <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 border border-white/20">
+              <div className="text-center">
+                <p className="text-3xl font-bold text-blue-400 mb-2">
+                  {students.length > 0
+                    ? (students.reduce((sum, s) => sum + s.Moyenne_Bepc, 0) / students.length).toFixed(2)
+                    : "0.00"}
+                </p>
+                <p className="text-white/70">المعدل العام</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* رسالة ترحيب عند عدم وجود بيانات */}
+        {students.length === 0 && !processing.isProcessing && pathname === "/" && (
+          <div className="text-center py-16">
+            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-12 border border-white/20">
+              <FileText className="w-24 h-24 text-white/50 mx-auto mb-6" />
+              <h3 className="text-2xl font-bold text-white mb-4">مرحباً بك!</h3>
+              <p className="text-white/70 text-lg mb-6 max-w-md mx-auto">
+                ابدأ برفع ملف Excel يحتوي على نتائج الطلاب للبحث والاستعلام عن النتائج بسهولة
+              </p>
+              <div className="flex flex-wrap justify-center gap-4 text-sm text-white/60">
+                <span>✓ يدعم ملفات .xlsx و .xls</span>
+                <span>✓ بحث سريع بالرقم أو الاسم</span>
+                <span>✓ حفظ تلقائي للبيانات</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* أنماط الطباعة */}
+      <style jsx>{`
+        @media print {
+          body * {
+            visibility: hidden;
+          }
+          .print-section, .print-section * {
+            visibility: visible;
+          }
+          .print-section {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+          }
+          .no-print {
+            display: none !important;
+          }
+        }
+      `}</style>
+    </div>
+  )
+}
