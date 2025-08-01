@@ -3,8 +3,8 @@ import type { Metadata } from "next"
 import ClientRootLayout from "./ClientRootLayout"
 
 export const metadata: Metadata = {
-  title: "تطبيق ويب حديث",
-  description: "بنية تطبيق ويب هجينة باستخدام Next.js 15",
+  title: "Twize",
+  description: "from kan ai",
 }
 
 export default async function RootLayout({

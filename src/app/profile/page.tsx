@@ -1,19 +1,7 @@
-"use client" // Make it a client component to use useStudentData if needed later
-
-import { User } from "lucide-react"
-// import { useStudentData } from "@/components/student-data-provider" // Uncomment if you need student data here
+// app/profile/page.js
+'use client';
+import UserProfile from '@/components/UserProfile';
 
 export default function ProfilePage() {
-  // const { user } = useStudentData(); // Example of how to get user data if needed
-
-  return (
-    <div className="bg-white/10 backdrop-blur-md rounded-2xl shadow-2xl p-6 mb-8 border border-white/20">
-      <div className="text-center text-white">
-        <User className="w-16 h-16 mx-auto mb-4 text-white/70" />
-        <h3 className="text-xl font-bold mb-2">الملف الشخصي</h3>
-        <p className="text-white/70">قريباً...</p>
-        {/* {user && <p className="text-white/70">مرحباً، {user.email}</p>} */}
-      </div>
-    </div>
-  )
+  return <UserProfile />;
 }

@@ -33,7 +33,7 @@ export default function GeneralStatisticsDisplay({ students }: GeneralStatistics
       </div>
       <div className="bg-white/10 backdrop-blur-md rounded-xl p-6 border border-white/20">
         <div className="text-center">
-          <p className="text-3xl font-bold text-blue-400 mb-2">{averageMoyenne}</p>
+          <p className="text-3xl font-bold text-blue-100 mb-2">{averageMoyenne}</p>
           <p className="text-white/70">المعدل العام</p>
         </div>
       </div>

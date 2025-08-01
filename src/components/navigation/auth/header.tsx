@@ -16,7 +16,7 @@ export function AuthHeader() {
   ]
 
   return (
-    <nav className="sticky top-0 z-30 w-full bg-white/90 backdrop-blur-md shadow-lg">
+    <nav className="sticky top-0 z-30 w-full  bg-white/10 border border-white/30 rounded-full  placeholder-white/50 text-lg backdrop-blur-sm">
       <div className="max-w-6xl mx-auto px-4">
         <div className="flex items-center justify-around py-4">
           {navItems.map((item) => (
@@ -25,8 +25,8 @@ export function AuthHeader() {
                 variant="ghost"
                 size="icon"
                 className={cn(
-                  "flex h-10 w-10 flex-col items-center justify-center rounded-lg transition-all",
-                  pathname === item.href ? "bg-blue-100 text-blue-600" : "text-gray-600 hover:text-blue-600"
+                  "flex h-10 w-10 flex-col items-center justify-center rounded-full transition-all  bg-white/10 border border-white/30  placeholder-white/50 text-lg backdrop-blur-sm",
+                  pathname === item.href ? " text-blue-50" : "text-gray-50 hover:text-green-600"
                 )}
               >
                 <item.icon className="h-6 w-6" />

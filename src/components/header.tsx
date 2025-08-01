@@ -37,16 +37,16 @@ export default function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-40 w-full border-b bg-background no-print">
+    <header className="sticky top-0 z-40 w-full  no-print">
       <div className="container flex h-16 items-center justify-between px-4 md:px-6">
         <Link href="/" className="flex items-center gap-2 font-semibold">
-          <Image src="/placeholder.svg?height=32&width=32" width={32} height={32} alt="Logo" className="rounded-full" />
-          <span className="sr-only">اسم التطبيق</span>
-          <span className="text-lg">تطبيقي</span>
+          <Image src="/twis.svg" width={100} height={100} alt="Logo" className="rounded-full" />
+          
+          
         </Link>
         <div className="flex items-center gap-2">
           {user ? (
-            <Button variant="ghost" onClick={handleSignOut} className="flex items-center gap-2 text-sm font-medium">
+            <Button variant="ghost" onClick={handleSignOut} className="flex items-center gap-2 text-sm font-medium  bg-white border border-white/30 rounded-full z-40 ">
               <LogOut className="h-6 w-6" />
               <span>تسجيل الخروج</span>
             </Button>

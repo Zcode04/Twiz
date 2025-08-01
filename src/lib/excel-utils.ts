@@ -35,3 +35,10 @@ export const KEY_MAP = {
   Moyenne_Bepc: new Set(["moyenne_bepc", "المعدل", "moyenne", "average", "grade", "score", "note"]),
   Decision: new Set(["decision", "القرار", "result", "status", "resultat", "outcome"]),
 } as const // Use as const for better type inference
+
+
+
+
+
+
+

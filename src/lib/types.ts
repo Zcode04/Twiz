@@ -16,3 +16,11 @@ export interface ProcessingState {
   progress: number;
   message: string;
 }
+
+
+
+
+
+
+
+
