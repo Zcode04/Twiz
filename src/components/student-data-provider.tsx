@@ -3,11 +3,11 @@
 import type React from "react"
 import { useState, useEffect, useMemo, useRef, useCallback, createContext, useContext } from "react"
 import * as XLSX from "xlsx"
-import { createClient } from "@/lib/supabase-browser" // Assuming this is your browser client
+import { createClient } from "@/lib/supabase-browser"
 import type { User as SupabaseUser } from "@supabase/supabase-js"
 import { clean, normalizeKey } from "@/lib/excel-utils"
 import { SearchIndex } from "@/lib/search-index"
-import { Loader2, FileText, Database, Search } from "lucide-react" // Import icons
+import { Loader2, FileText, Database, Search } from "lucide-react"
 
 // Updated Student interface to match the new data structure
 interface Student {
@@ -62,8 +62,10 @@ interface StudentDataContextType {
   searchResults: Student[]
   selectedStudent: Student | null
   handleFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => Promise<void>
+  loadPublicData: (fileName: string) => Promise<void>
   highlightText: (text: string, query: string) => React.ReactNode
   user: SupabaseUser | null
+  currentFileName: string
   InlineLoadingIndicator: React.ComponentType<{ processing: ProcessingState }>
 }
 
@@ -135,6 +137,7 @@ const InlineLoadingIndicator = ({ processing }: { processing: ProcessingState })
 export function StudentDataProvider({ children }: StudentDataProviderProps) {
   const [students, setStudents] = useState<Student[]>([])
   const [searchQuery, setSearchQuery] = useState("")
+  const [currentFileName, setCurrentFileName] = useState("")
   const [processing, setProcessing] = useState<ProcessingState>({
     isProcessing: false,
     stage: "reading",
@@ -148,13 +151,11 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
   // Fetch user session on mount and listen for auth state changes
   useEffect(() => {
     const fetchAndListenUser = async () => {
-      // Fetch initial user session
       const {
         data: { user: initialFetchedUser },
       } = await supabase.auth.getUser()
       setUser(initialFetchedUser)
 
-      // Listen for auth state changes
       const {
         data: { subscription },
       } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -206,6 +207,20 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
           )
           setStudents(mappedStudents)
           searchIndexRef.current = new SearchIndex(mappedStudents)
+          
+          // تحميل اسم الملف
+          const { data: fileData } = await supabase
+            .from("user_files")
+            .select("file_name")
+            .eq("user_id", user.id)
+            .order("uploaded_at", { ascending: false })
+            .limit(1)
+            .single()
+          
+          if (fileData) {
+            setCurrentFileName(fileData.file_name)
+          }
+          
           setProcessing({
             isProcessing: false,
             stage: "complete",
@@ -231,6 +246,71 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
     loadUserData()
   }, [user, supabase])
 
+  // تحميل البيانات العامة للمستخدمين غير المسجلين
+  const loadPublicData = useCallback(async (fileName: string) => {
+    setProcessing({
+      isProcessing: true,
+      stage: "reading",
+      progress: 25,
+      message: "جاري تحميل البيانات العامة...",
+    })
+    
+    try {
+      const { data, error } = await supabase
+        .from("public_students_data")
+        .select("*")
+        .eq("file_name", fileName)
+      
+      if (error) throw error
+
+      if (data && data.length > 0) {
+        setProcessing((prev) => ({ ...prev, progress: 75, message: "جاري معالجة البيانات..." }))
+        const mappedStudents = data.map(
+          (d): Student => ({
+            NODOSS: d.nodoss,
+            SERIE: d.serie,
+            TYPEC: d.typec,
+            NOM_FR: d.nom_fr,
+            NOM_AR: d.nom_ar,
+            DATN: d.datn,
+            LIEUN_FR: d.lieun_fr,
+            LIEUN_AR: d.lieun_ar,
+            Moy_Bac: d.moy_bac,
+            Decision: d.decision,
+            Wilaya_FR: d.wilaya_fr,
+            Wilaya_AR: d.wilaya_ar,
+            Centre_Ex: d.centre_ex,
+            Etablissement: d.etablissement,
+            Etablissement_AR: d.etablissement_ar,
+          }),
+        )
+        setStudents(mappedStudents)
+        setCurrentFileName(fileName)
+        searchIndexRef.current = new SearchIndex(mappedStudents)
+        
+        setProcessing({
+          isProcessing: false,
+          stage: "complete",
+          progress: 100,
+          message: `تم تحميل ${mappedStudents.length} طالب بنجاح`,
+        })
+        setTimeout(() => {
+          setProcessing((prev) => ({ ...prev, message: "" }))
+        }, 2000)
+      } else {
+        throw new Error("لم يتم العثور على بيانات")
+      }
+    } catch (error) {
+      console.error("Error loading public data:", error)
+      setProcessing({
+        isProcessing: false,
+        stage: "complete",
+        progress: 0,
+        message: "خطأ في تحميل البيانات العامة",
+      })
+    }
+  }, [supabase])
+
   // Enhanced file validation function
   const validateExcelFile = (file: File): Promise<boolean> => {
     return new Promise((resolve) => {
@@ -240,26 +320,22 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
         'application/vnd.ms-excel'
       ]
       
-      // Check file extension
       const hasValidExtension = validExtensions.some(ext => 
         file.name.toLowerCase().endsWith(ext)
       )
       
-      // Check MIME type
       const hasValidMimeType = validMimeTypes.includes(file.type)
       
-      // Additional check: read file signature (magic numbers)
       if (hasValidExtension || hasValidMimeType) {
         const reader = new FileReader()
         reader.onload = (e) => {
           const arr = new Uint8Array(e.target?.result as ArrayBuffer)
-          // Check for Excel file signatures
-          const isXLSX = arr[0] === 0x50 && arr[1] === 0x4B // PK (ZIP header for .xlsx)
-          const isXLS = arr[0] === 0xD0 && arr[1] === 0xCF // OLE header for .xls
+          const isXLSX = arr[0] === 0x50 && arr[1] === 0x4B
+          const isXLS = arr[0] === 0xD0 && arr[1] === 0xCF
           resolve(isXLSX || isXLS)
         }
         reader.onerror = () => resolve(false)
-        reader.readAsArrayBuffer(file.slice(0, 8)) // Read first 8 bytes
+        reader.readAsArrayBuffer(file.slice(0, 8))
       } else {
         resolve(false)
       }
@@ -308,13 +384,18 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
       const file = e.target.files?.[0]
       if (!file) return
 
-      // Enhanced file validation
       const isValidFile = await validateExcelFile(file)
       if (!isValidFile) {
         alert("يرجى اختيار ملف Excel صحيح (.xlsx أو .xls)")
         e.target.value = ""
         return
       }
+
+      // تنظيف اسم الملف وإضافة الطابع الزمني
+      const cleanFileName = file.name.replace(/\.[^/.]+$/, "")
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')
+      const finalFileName = `${cleanFileName}_${timestamp}`
+      setCurrentFileName(finalFileName)
 
       setProcessing({
         isProcessing: true,
@@ -324,15 +405,14 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
       })
 
       try {
-        // Read file with progress tracking
         const arrayBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
           const reader = new FileReader()
           let lastProgress = 5
           
           reader.onprogress = (event) => {
             if (event.lengthComputable) {
-              const progress = 5 + (event.loaded / event.total) * 20 // 5-25%
-              if (progress - lastProgress > 2) { // Update every 2%
+              const progress = 5 + (event.loaded / event.total) * 20
+              if (progress - lastProgress > 2) {
                 setProcessing(prev => ({
                   ...prev,
                   progress,
@@ -361,13 +441,12 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
           message: "جاري تحليل البيانات...",
         }))
 
-        // Enhanced Excel processing with better error handling
         const workbook = XLSX.read(new Uint8Array(arrayBuffer), {
           type: "array",
           cellDates: true,
           cellNF: false,
           cellText: false,
-          codepage: 65001, // UTF-8 encoding
+          codepage: 65001,
           raw: false
         })
         
@@ -375,14 +454,12 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
           throw new Error("الملف لا يحتوي على أوراق عمل")
         }
 
-        // Try to find the most suitable sheet
         let worksheet = workbook.Sheets[workbook.SheetNames[0]]
         
-        // If first sheet is empty, try others
         for (const sheetName of workbook.SheetNames) {
           const sheet = workbook.Sheets[sheetName]
           const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1:A1')
-          if (range.e.r > 0) { // Has more than header row
+          if (range.e.r > 0) {
             worksheet = sheet
             break
           }
@@ -392,7 +469,7 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
           defval: "",
           raw: false,
           dateNF: "dd/mm/yyyy",
-          blankrows: false // Skip blank rows
+          blankrows: false
         })
 
         if (!jsonData.length) {
@@ -406,13 +483,11 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
           message: `جاري معالجة ${jsonData.length} سجل...`,
         }))
 
-        // تحديد المفاتيح مع تحسينات
         const firstRow = jsonData[0]
         const originalKeys = Object.keys(firstRow)
         const normalizedKeys = originalKeys.map(normalizeKey)
         const keyMapping = new Map<keyof Student, number>()
 
-        // Enhanced key mapping with fuzzy matching
         Object.entries(KEY_MAP).forEach(([targetKey, possibleKeys]) => {
           let bestMatch = -1
           let bestScore = 0
@@ -420,13 +495,11 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
           for (let i = 0; i < normalizedKeys.length; i++) {
             const normalizedKey = normalizedKeys[i]
             
-            // Exact match (highest priority)
             if (possibleKeys.has(normalizedKey)) {
               keyMapping.set(targetKey as keyof Student, i)
               return
             }
             
-            // Fuzzy match for similar keys
             Array.from(possibleKeys).forEach(possibleKey => {
               const similarity = calculateSimilarity(normalizedKey, possibleKey)
               if (similarity > 0.7 && similarity > bestScore) {
@@ -445,8 +518,7 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
           throw new Error("لم يتم العثور على أعمدة مطابقة في الملف")
         }
 
-        // معالجة البيانات بمجموعات صغيرة لتحسين الأداء مع تحديثات أكثر سلاسة
-        const batchSize = 500 // Reduced batch size for smoother progress
+        const batchSize = 500
         const processedStudents: Student[] = []
         
         for (let i = 0; i < jsonData.length; i += batchSize) {
@@ -459,7 +531,6 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
                 const rawValue = row[originalKeys[columnIndex]]
                 switch (studentKey) {
                   case "Moy_Bac":
-                    // Handle different decimal separators and clean numeric values
                     const moyenne = String(rawValue).replace(/[,،]/g, ".").replace(/[^\d.]/g, "")
                     student[studentKey] = Number(moyenne) || 0
                     break
@@ -478,14 +549,13 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
           
           processedStudents.push(...batchStudents)
 
-          const progress = 50 + ((i + batch.length) / jsonData.length) * 25 // 50-75%
+          const progress = 50 + ((i + batch.length) / jsonData.length) * 25
           setProcessing((prev) => ({
             ...prev,
             progress,
             message: `تمت معالجة ${Math.min(i + batch.length, jsonData.length)} من ${jsonData.length} سجل...`,
           }))
           
-          // Smoother progress updates
           await new Promise((resolve) => setTimeout(resolve, 10))
         }
 
@@ -499,12 +569,11 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
           message: "جاري إنشاء فهرس البحث...",
         }))
 
-        // إنشاء فهرس البحث
         const searchIndex = new SearchIndex(processedStudents)
         searchIndexRef.current = searchIndex
         setStudents(processedStudents)
 
-        // حفظ في قاعدة البيانات إذا كان المستخدم مسجلاً
+        // حفظ في قاعدة البيانات
         if (user) {
           setProcessing((prev) => ({
             ...prev,
@@ -513,7 +582,7 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
             message: "جاري حفظ البيانات...",
           }))
           
-          // Clear existing data first
+          // حفظ بيانات المستخدم
           await supabase.from("bac_students_data").delete().eq("user_id", user.id)
           
           const dataToInsert = processedStudents.map((student) => ({
@@ -535,18 +604,64 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
             etablissement_ar: student.Etablissement_AR,
           }))
           
-          // حفظ بمجموعات صغيرة مع تتبع التقدم
           const saveBatchSize = 200
           for (let i = 0; i < dataToInsert.length; i += saveBatchSize) {
             const batch = dataToInsert.slice(i, i + saveBatchSize)
             await supabase.from("bac_students_data").insert(batch)
             
-            const saveProgress = 85 + ((i + batch.length) / dataToInsert.length) * 10 // 85-95%
+            const saveProgress = 85 + ((i + batch.length) / dataToInsert.length) * 5
             setProcessing((prev) => ({
               ...prev,
               progress: saveProgress,
               message: `جاري حفظ ${Math.min(i + batch.length, dataToInsert.length)} من ${dataToInsert.length} سجل...`,
             }))
+          }
+
+          // حفظ معلومات الملف
+          await supabase.from("user_files").upsert({
+            user_id: user.id,
+            file_name: finalFileName,
+            students_count: processedStudents.length,
+            uploaded_at: new Date().toISOString()
+          })
+
+          // حفظ في الملفات العامة للمستخدمين غير المسجلين
+          await supabase.from("public_files").insert({
+            file_name: finalFileName,
+            students_count: processedStudents.length,
+            uploader_name: user.email?.split('@')[0] || 'مستخدم',
+            uploaded_at: new Date().toISOString()
+          })
+
+          // حفظ البيانات العامة
+          const publicDataToInsert = processedStudents.map((student) => ({
+            file_name: finalFileName,
+            nodoss: student.NODOSS,
+            serie: student.SERIE,
+            typec: student.TYPEC,
+            nom_fr: student.NOM_FR,
+            nom_ar: student.NOM_AR,
+            datn: student.DATN,
+            lieun_fr: student.LIEUN_FR,
+            lieun_ar: student.LIEUN_AR,
+            moy_bac: student.Moy_Bac,
+            decision: student.Decision,
+            wilaya_fr: student.Wilaya_FR,
+            wilaya_ar: student.Wilaya_AR,
+            centre_ex: student.Centre_Ex,
+            etablissement: student.Etablissement,
+            etablissement_ar: student.Etablissement_AR,
+          }))
+
+          setProcessing((prev) => ({
+            ...prev,
+            progress: 95,
+            message: "جاري حفظ البيانات العامة...",
+          }))
+
+          for (let i = 0; i < publicDataToInsert.length; i += saveBatchSize) {
+            const batch = publicDataToInsert.slice(i, i + saveBatchSize)
+            await supabase.from("public_students_data").insert(batch)
           }
         }
 
@@ -575,7 +690,6 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
         }, 5000)
       }
       
-      // إعادة تعيين input
       e.target.value = ""
     },
     [user, supabase],
@@ -597,7 +711,8 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
   // تمييز النص في نتائج البحث
   const highlightText = (text: string, query: string) => {
     if (!query.trim()) return text
-    const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi")
+    const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const regex = new RegExp(`(${escapedQuery})`, "gi")
     const parts = text.split(regex)
     return (
       <>
@@ -623,11 +738,13 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
       searchResults,
       selectedStudent,
       handleFileUpload,
+      loadPublicData,
       highlightText,
       user,
+      currentFileName,
       InlineLoadingIndicator,
     }),
-    [students, processing, searchQuery, setSearchQuery, searchResults, selectedStudent, handleFileUpload, user],
+    [students, processing, searchQuery, setSearchQuery, searchResults, selectedStudent, handleFileUpload, loadPublicData, user, currentFileName],
   )
 
   return (
