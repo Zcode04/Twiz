@@ -2,15 +2,26 @@
 import { useState, useEffect } from "react"
 import type React from "react"
 import { Activity, FolderSync, Search, X, FileText, Users, Database } from "lucide-react"
-import type { ProcessingState } from "@/lib/types"
-import type { User as SupabaseUser } from "@supabase/supabase-js"
 import { createClient } from "@/lib/supabase-browser"
 import Link from "next/link"
+
+// تعريف الأنواع محلياً لتجنب مشاكل الاستيراد
+interface ProcessingState {
+  isProcessing: boolean
+  stage: "reading" | "parsing" | "indexing" | "saving" | "complete"
+  progress: number
+  message: string
+}
+
+interface User {
+  id: string
+  email?: string
+}
 
 interface FileUploadSectionProps {
   processing: ProcessingState
   handleFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => Promise<void>
-  user: SupabaseUser | null
+  user: User | null
   studentsCount: number
   loadPublicData?: (fileName: string) => Promise<void>
 }
@@ -28,7 +39,7 @@ interface UserFile {
   uploaded_at: string
 }
 
-export default function EnhancedFileUploadSection({
+function FileUploadSectionFixed({
   processing,
   handleFileUpload,
   user,
@@ -42,6 +53,7 @@ export default function EnhancedFileUploadSection({
   const [showUserFiles, setShowUserFiles] = useState(false)
   const [loadingPublicFiles, setLoadingPublicFiles] = useState(false)
   const [loadingUserFiles, setLoadingUserFiles] = useState(false)
+
   const supabase = createClient()
 
   // تحميل الملفات العامة للمستخدمين غير المسجلين
@@ -136,8 +148,8 @@ export default function EnhancedFileUploadSection({
 
     try {
       console.log("Loading user file:", fileName)
-      // تحميل بيانات المستخدم مباشرة من قاعدة البيانات
-      window.location.reload() // حل مؤقت لإعادة تحميل البيانات
+      // إعادة تحميل الصفحة لتحديث البيانات
+      window.location.reload()
     } catch (error) {
       console.error("Error loading user file:", error)
     }
@@ -397,3 +409,6 @@ export default function EnhancedFileUploadSection({
     </div>
   )
 }
+
+// تصدير المكون كـ default export
+export default FileUploadSectionFixed
