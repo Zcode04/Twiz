@@ -38,11 +38,7 @@ export default function FileUploadSection({
   // تحميل الملفات العامة للمستخدمين غير المسجلين
   useEffect(() => {
     if (!user) {
-      // تأخير بسيط لتجنب المشاكل مع التحديث المباشر
-      const timer = setTimeout(() => {
-        loadPublicFiles()
-      }, 100)
-      return () => clearTimeout(timer)
+      loadPublicFiles()
     }
   }, [user])
 
@@ -55,34 +51,19 @@ export default function FileUploadSection({
         .order("uploaded_at", { ascending: false })
         .limit(10)
 
-      if (error) {
-        console.error("Supabase error:", error)
-        // في حالة عدم وجود الجدول أو خطأ في الاستعلام، نعرض رسالة مناسبة
-        setPublicFiles([])
-        return
-      }
-      
+      if (error) throw error
       setPublicFiles(data || [])
     } catch (error) {
       console.error("Error loading public files:", error)
-      setPublicFiles([])
     } finally {
       setLoadingPublicFiles(false)
     }
   }
 
   const handleLoadPublicFile = async (fileName: string) => {
-    if (!loadPublicData) {
-      console.error("loadPublicData function not provided")
-      return
-    }
-    
-    try {
+    if (loadPublicData) {
       await loadPublicData(fileName)
       setShowPublicFiles(false)
-    } catch (error) {
-      console.error("Error loading public file:", error)
-      // يمكن إضافة رسالة خطأ للمستخدم هنا
     }
   }
 
@@ -124,31 +105,26 @@ export default function FileUploadSection({
 
       {/* المحتوى الأصلي */}
       <div className="space-y-2 max-w-md mx-auto px-4 sm:px-6 lg:px-8">
-        {/* قسم رفع الملفات - متاح لجميع المستخدمين */}
-        <label className="cursor-pointer block border-2 bg-blue-400/5 border-green-400/30 rounded-full p-4 sm:p-6 text-center hover:border-white/50 transition-all duration-300 hover:bg-white/5">
-          <FolderSync className="w-14 h-14 md:w-16 md:h-16 text-white mx-auto mb-2" />
-          <span className="text-base sm:text-lg font-medium text-white hover:text-blue-200 transition-colors">
-            {processing.isProcessing ? "جاري المعالجة..." : "نرجو منكم رفع الملفات"}
-          </span>
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={handleFileUpload}
-            disabled={processing.isProcessing}
-            className="hidden"
-          />
-        </label>
+        {/* قسم رفع الملفات للمستخدمين المسجلين */}
+        {user && (
+          <label className="cursor-pointer block border-2 bg-blue-400/5 border-green-400/30 rounded-full p-4 sm:p-6 text-center hover:border-white/50 transition-all duration-300 hover:bg-white/5">
+            <FolderSync className="w-14 h-14 md:w-16 md:h-16 text-white mx-auto mb-2" />
+            <span className="text-base sm:text-lg font-medium text-white hover:text-blue-200 transition-colors">
+              {processing.isProcessing ? "جاري المعالجة..." : "نرجو منكم رفع الملفات"}
+            </span>
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleFileUpload}
+              disabled={processing.isProcessing}
+              className="hidden"
+            />
+          </label>
+        )}
 
         {/* قسم الملفات العامة للمستخدمين غير المسجلين */}
         {!user && (
           <div className="space-y-3">
-            {/* فاصل بصري للمستخدمين غير المسجلين */}
-            <div className="flex items-center justify-center">
-              <div className="flex-1 h-px bg-gradient-to-r from-transparent via-gray-400/30 to-transparent"></div>
-              <span className="px-3 text-gray-400 text-sm">أو</span>
-              <div className="flex-1 h-px bg-gradient-to-r from-transparent via-gray-400/30 to-transparent"></div>
-            </div>
-
             <button
               onClick={() => setShowPublicFiles(!showPublicFiles)}
               className="w-full border-2 bg-purple-400/5 border-purple-400/30 rounded-full p-4 sm:p-6 text-center hover:border-white/50 transition-all duration-300 hover:bg-white/5"
@@ -198,10 +174,8 @@ export default function FileUploadSection({
             )}
 
             {showPublicFiles && publicFiles.length === 0 && !loadingPublicFiles && (
-              <div className="bg-gray-900/50 border border-gray-700/30 rounded-2xl p-4 backdrop-blur-sm text-center text-gray-400 py-8">
-                <FileText className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                <p>لا توجد ملفات متاحة حالياً</p>
-                <p className="text-xs mt-1">سجل الدخول لرفع ملفاتك الخاصة</p>
+              <div className="text-center text-gray-400 py-4">
+                لا توجد ملفات متاحة حالياً
               </div>
             )}
           </div>
@@ -261,20 +235,11 @@ export default function FileUploadSection({
                 <span>
                   {user 
                     ? "بصيغة إكسل فقط, نتميّز بسرعة معالجة البيانات"
-                    : "ارفع ملفك أو تصفح الملفات المتاحة - بصيغة إكسل فقط"
+                    : "يمكنك تصفح الملفات المتاحة والبحث فيها دون الحاجة لتسجيل الدخول"
                   }
                 </span>
               </div>
             </div>
-            
-            {/* رسالة إضافية للمستخدمين غير المسجلين */}
-            {!user && (
-              <div className="mt-3 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-                <p className="text-amber-200 text-xs">
-                  💡 سجل الدخول لحفظ ملفاتك والوصول إليها في أي وقت
-                </p>
-              </div>
-            )}
           </div>
         )}
       </div>
