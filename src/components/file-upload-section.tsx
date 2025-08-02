@@ -23,7 +23,7 @@ export default function FileUploadSection({ processing, handleFileUpload, studen
         <div className="relative bg-gray-950/70 border border-amber-400/30 rounded-2xl p-6 backdrop-blur-sm max-w-md mx-auto">
           <button
             onClick={() => setShowNotice(false)}
-            className="absolute top-4 right-4 text-amber-200 hover:text-white transition-colors p-1 hover:bg-white/10 rounded-full"
+            className="absolute top-4 right-4 text-green-400 hover:text-white transition-colors p-1 hover:bg-white/10 rounded-full"
             aria-label="إغلاق التنويه"
           >
             <X className="w-5 h-5" />
@@ -49,7 +49,7 @@ export default function FileUploadSection({ processing, handleFileUpload, studen
         <label className="cursor-pointer block border-2 bg-blue-400/5 border-green-400/30 rounded-full p-4 sm:p-6 text-center hover:border-white/50 transition-all duration-300 hover:bg-white/5">
           <FolderSync className="w-14 h-14 md:w-16 md:h-16 text-white mx-auto mb-2" /> {/* Made icon responsive */}
           <span className="text-base sm:text-lg font-medium text-white hover:text-blue-200 transition-colors">
-            {processing.isProcessing ? "جاري المعالجة..." : "ارفع الملف بصيغة"}
+            {processing.isProcessing ? "جاري المعالجة..." : "نرجو منكم رفع الملفات"}
           </span>
           <input
             type="file"
@@ -108,10 +108,10 @@ export default function FileUploadSection({ processing, handleFileUpload, studen
 
         {/* رسالة ترحيب عند عدم وجود بيانات */}
         {studentsCount === 0 && !processing.isProcessing && (
-          <div className="text-center py-1 ">
-            <div className="flex bg-white/10 backdrop-blur-md rounded-full p-2 border border-white/20">
-              <div className="flex flex-wrap justify-center items-center text-sm text-white/60">
-                <span> يدعم ملفات .xlsx و .xls</span>
+          <div className="text-center ">
+            <div className="flex bg-gray-950/10 backdrop-blur rounded-tl-full p-2 border border-white/20">
+              <div className="flex flex-wrap justify-center items-center text-sm text-white/70">
+                <span> بصيغة إكسل فقط, نتميّز بسرعة معالجة البيانات </span>
               </div>
             </div>
           </div>
