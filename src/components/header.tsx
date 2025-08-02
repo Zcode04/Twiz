@@ -2,7 +2,7 @@
 
 import Image from "next/image"
 import Link from "next/link"
-import { UserCircle, LogOut } from "lucide-react"
+import { LogIn, LogOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useStudentData } from "@/components/student-data-provider"
 import { createClient } from "@/lib/supabase-browser" // Import browser client
@@ -56,8 +56,8 @@ export default function Header() {
               <span>تسجيل الخروج</span>
             </Button>
           ) : (
-            <Button variant="ghost" onClick={handleSignIn} className="flex items-center gap-2 text-sm font-medium">
-              <UserCircle className="h-6 w-6" />
+            <Button variant="ghost" onClick={handleSignIn} className="flex items-center gap-2 text-sm font-    bg-green-600/20 border border-white/30 rounded-full z-40">
+              <LogIn className="h-6 w-6" />
               <span>تسجيل الدخول</span>
             </Button>
           )}
