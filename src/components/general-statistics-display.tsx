@@ -11,11 +11,15 @@ export default function GeneralStatisticsDisplay({ students }: GeneralStatistics
 
   const successfulStudents = students.filter(
     (s) =>
-      s.Decision.toLowerCase().includes("admis") || s.Decision.toLowerCase().includes("ناجح") || s.Moyenne_Bepc >= 10,
+      s.Decision.toLowerCase().includes("admis") ||
+      s.Decision.toLowerCase().includes("ناجح") ||
+      s.Moy_Bac >= 10,
   ).length
 
   const averageMoyenne =
-    students.length > 0 ? (students.reduce((sum, s) => sum + s.Moyenne_Bepc, 0) / students.length).toFixed(2) : "0.00"
+    students.length > 0
+      ? (students.reduce((sum, s) => sum + s.Moy_Bac, 0) / students.length).toFixed(2)
+      : "0.00"
 
   return (
     <div className="grid md:grid-cols-3 gap-6 mt-8">

@@ -5,10 +5,54 @@ import { useState, useEffect, useMemo, useRef, useCallback, createContext, useCo
 import * as XLSX from "xlsx"
 import { createClient } from "@/lib/supabase-browser" // Assuming this is your browser client
 import type { User as SupabaseUser } from "@supabase/supabase-js"
-import { clean, normalizeKey, KEY_MAP } from "@/lib/excel-utils"
+import { clean, normalizeKey } from "@/lib/excel-utils"
 import { SearchIndex } from "@/lib/search-index"
-import type { Student, ProcessingState } from "@/lib/types"
 import { Loader2, FileText, Database, Search } from "lucide-react" // Import icons
+
+// Updated Student interface to match the new data structure
+interface Student {
+  NODOSS: number        // رقم الملف
+  SERIE: string         // السلسلة
+  TYPEC: string         // النوع
+  NOM_FR: string        // الاسم بالفرنسية
+  NOM_AR: string        // الاسم بالعربية
+  DATN: string          // تاريخ الميلاد
+  LIEUN_FR: string      // مكان الميلاد بالفرنسية
+  LIEUN_AR: string      // مكان الميلاد بالعربية
+  Moy_Bac: number       // معدل البكالوريا
+  Decision: string      // القرار
+  Wilaya_FR: string     // الولاية بالفرنسية
+  Wilaya_AR: string     // الولاية بالعربية
+  Centre_Ex: string     // مركز الامتحان
+  Etablissement: string // المؤسسة
+  Etablissement_AR: string // المؤسسة بالعربية
+}
+
+interface ProcessingState {
+  isProcessing: boolean
+  stage: "reading" | "parsing" | "indexing" | "saving" | "complete"
+  progress: number
+  message: string
+}
+
+// Updated KEY_MAP for the new data structure
+const KEY_MAP: Record<keyof Student, Set<string>> = {
+  NODOSS: new Set(['nodoss', 'رقم_الملف', 'numero_dossier', 'dossier_number']),
+  SERIE: new Set(['serie', 'السلسلة', 'series', 'section']),
+  TYPEC: new Set(['typec', 'النوع', 'type', 'category']),
+  NOM_FR: new Set(['nom_fr', 'الاسم_فرنسية', 'name_french', 'nom_francais']),
+  NOM_AR: new Set(['nom_ar', 'الاسم_عربية', 'name_arabic', 'nom_arabe']),
+  DATN: new Set(['datn', 'تاريخ_الميلاد', 'date_naissance', 'birth_date']),
+  LIEUN_FR: new Set(['lieun_fr', 'مكان_الميلاد_فرنسية', 'lieu_naissance_fr', 'birthplace_french']),
+  LIEUN_AR: new Set(['lieun_ar', 'مكان_الميلاد_عربية', 'lieu_naissance_ar', 'birthplace_arabic']),
+  Moy_Bac: new Set(['moy_bac', 'معدل_البكالوريا', 'moyenne_bac', 'bac_average']),
+  Decision: new Set(['decision', 'القرار', 'resultat', 'result']),
+  Wilaya_FR: new Set(['wilaya_fr', 'الولاية_فرنسية', 'province_french']),
+  Wilaya_AR: new Set(['wilaya_ar', 'الولاية_عربية', 'province_arabic']),
+  Centre_Ex: new Set(['centre_ex', 'مركز_الامتحان', 'exam_center', 'centre_examen']),
+  Etablissement: new Set(['etablissement', 'المؤسسة', 'school', 'institution']),
+  Etablissement_AR: new Set(['etablissement_ar', 'المؤسسة_عربية', 'school_arabic', 'institution_arabic'])
+}
 
 interface StudentDataContextType {
   students: Student[]
@@ -136,22 +180,28 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
         message: "جاري تحميل البيانات المحفوظة...",
       })
       try {
-        const { data, error } = await supabase.from("students_data").select("*").eq("user_id", user.id)
+        const { data, error } = await supabase.from("bac_students_data").select("*").eq("user_id", user.id)
         if (error) throw error
 
         if (data && data.length > 0) {
           setProcessing((prev) => ({ ...prev, progress: 75, message: "جاري معالجة البيانات..." }))
           const mappedStudents = data.map(
             (d): Student => ({
-              Num_Bepc: d.num_bepc,
-              NOM: d.nom,
-              LIEU_NAISS: d.lieu_naiss,
-              DATE_NAISS: d.date_naiss,
-              WILAYA: d.wilaya,
-              Ecole: d.ecole,
-              Centre: d.centre,
-              Moyenne_Bepc: d.moyenne_bepc,
+              NODOSS: d.nodoss,
+              SERIE: d.serie,
+              TYPEC: d.typec,
+              NOM_FR: d.nom_fr,
+              NOM_AR: d.nom_ar,
+              DATN: d.datn,
+              LIEUN_FR: d.lieun_fr,
+              LIEUN_AR: d.lieun_ar,
+              Moy_Bac: d.moy_bac,
               Decision: d.decision,
+              Wilaya_FR: d.wilaya_fr,
+              Wilaya_AR: d.wilaya_ar,
+              Centre_Ex: d.centre_ex,
+              Etablissement: d.etablissement,
+              Etablissement_AR: d.etablissement_ar,
             }),
           )
           setStudents(mappedStudents)
@@ -408,13 +458,14 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
               keyMapping.forEach((columnIndex, studentKey) => {
                 const rawValue = row[originalKeys[columnIndex]]
                 switch (studentKey) {
-                  case "Moyenne_Bepc":
+                  case "Moy_Bac":
+                    // Handle different decimal separators and clean numeric values
                     const moyenne = String(rawValue).replace(/[,،]/g, ".").replace(/[^\d.]/g, "")
                     student[studentKey] = Number(moyenne) || 0
                     break
-                  case "Num_Bepc":
-                    const numBepc = String(rawValue).replace(/\D/g, "")
-                    student[studentKey] = Number(numBepc) || 0
+                  case "NODOSS":
+                    const nodoss = String(rawValue).replace(/\D/g, "")
+                    student[studentKey] = Number(nodoss) || 0
                     break
                   default:
                     student[studentKey] = clean(rawValue) as never
@@ -422,7 +473,8 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
               })
               return student as Student
             })
-            .filter((s) => s.Num_Bepc && s.NOM && String(s.NOM).trim().length > 0)
+            .filter((s) => s.NODOSS && (s.NOM_FR || s.NOM_AR) && 
+              (String(s.NOM_FR || s.NOM_AR).trim().length > 0))
           
           processedStudents.push(...batchStudents)
 
@@ -462,26 +514,32 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
           }))
           
           // Clear existing data first
-          await supabase.from("students_data").delete().eq("user_id", user.id)
+          await supabase.from("bac_students_data").delete().eq("user_id", user.id)
           
           const dataToInsert = processedStudents.map((student) => ({
             user_id: user.id,
-            num_bepc: student.Num_Bepc,
-            nom: student.NOM,
-            lieu_naiss: student.LIEU_NAISS,
-            date_naiss: student.DATE_NAISS,
-            wilaya: student.WILAYA,
-            ecole: student.Ecole,
-            centre: student.Centre,
-            moyenne_bepc: student.Moyenne_Bepc,
+            nodoss: student.NODOSS,
+            serie: student.SERIE,
+            typec: student.TYPEC,
+            nom_fr: student.NOM_FR,
+            nom_ar: student.NOM_AR,
+            datn: student.DATN,
+            lieun_fr: student.LIEUN_FR,
+            lieun_ar: student.LIEUN_AR,
+            moy_bac: student.Moy_Bac,
             decision: student.Decision,
+            wilaya_fr: student.Wilaya_FR,
+            wilaya_ar: student.Wilaya_AR,
+            centre_ex: student.Centre_Ex,
+            etablissement: student.Etablissement,
+            etablissement_ar: student.Etablissement_AR,
           }))
           
           // حفظ بمجموعات صغيرة مع تتبع التقدم
           const saveBatchSize = 200
           for (let i = 0; i < dataToInsert.length; i += saveBatchSize) {
             const batch = dataToInsert.slice(i, i + saveBatchSize)
-            await supabase.from("students_data").insert(batch)
+            await supabase.from("bac_students_data").insert(batch)
             
             const saveProgress = 85 + ((i + batch.length) / dataToInsert.length) * 10 // 85-95%
             setProcessing((prev) => ({
@@ -529,6 +587,7 @@ export function StudentDataProvider({ children }: StudentDataProviderProps) {
     return searchIndexRef.current.search(searchQuery)
   }, [searchQuery])
 
+  // البحث بالرقم (NODOSS)
   const selectedStudent = useMemo(() => {
     const qNum = Number(searchQuery.trim())
     if (!searchIndexRef.current || isNaN(qNum)) return null

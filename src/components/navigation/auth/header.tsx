@@ -4,7 +4,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-
+import { PlusCircle } from "lucide-react";
 export function AuthHeader() {
   const pathname = usePathname()
   
@@ -32,6 +32,7 @@ export function AuthHeader() {
                 <item.icon className="h-6 w-6" />
                 <span className="sr-only">{item.label}</span>
               </Button>
+               <PlusCircle className="w-6 h-6 text-white hover:text-green-400 transition" />
             </Link>
           ))}
         </div>

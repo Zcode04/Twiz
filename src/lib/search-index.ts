@@ -1,11 +1,16 @@
 // lib/search-index.ts
 import type { Student } from "./types"
 
-// مؤشر البحث المحسن
+/**
+ * مؤشر بحث متقدم للطلاب
+ * يدعم البحث برقم الملف (NODOSS) أو الاسم (عربي/فرنسي)
+ */
 export class SearchIndex {
   private byId = new Map<number, Student>()
-  private byName = new Map<string, Student[]>()
-  private nameTokens = new Map<string, Set<number>>()
+  private byNameFr = new Map<string, Student[]>()
+  private byNameAr = new Map<string, Student[]>()
+  private nameTokensFr = new Map<string, Set<number>>()
+  private nameTokensAr = new Map<string, Set<number>>()
 
   constructor(students: Student[]) {
     this.buildIndex(students)
@@ -13,29 +18,60 @@ export class SearchIndex {
 
   private buildIndex(students: Student[]) {
     students.forEach((student) => {
-      // فهرسة بالرقم
-      if (student.Num_Bepc) {
-        this.byId.set(student.Num_Bepc, student)
+      // 1. فهرسة بالرقم (NODOSS)
+      if (student.NODOSS) {
+        this.byId.set(student.NODOSS, student)
       }
-      // فهرسة بالاسم
-      const nameKey = student.NOM.toLowerCase()
-      if (!this.byName.has(nameKey)) {
-        this.byName.set(nameKey, [])
-      }
-      this.byName.get(nameKey)!.push(student)
-      // فهرسة الرموز المميزة للبحث السريع
-      const tokens = nameKey.split(/\s+/)
-      tokens.forEach((token) => {
-        if (token.length > 1) {
-          if (!this.nameTokens.has(token)) {
-            this.nameTokens.set(token, new Set())
-          }
-          this.nameTokens.get(token)!.add(student.Num_Bepc)
+
+      // 2. فهرسة الاسم الفرنسي
+      const nameFr = student.NOM_FR?.toLowerCase().trim() || ''
+      if (nameFr) {
+        if (!this.byNameFr.has(nameFr)) {
+          this.byNameFr.set(nameFr, [])
         }
-      })
+        this.byNameFr.get(nameFr)!.push(student)
+        
+        // رموز الاسم الفرنسي
+        const tokensFr = nameFr.split(/\s+/)
+        tokensFr.forEach((token) => {
+          if (token.length > 1) {
+            if (!this.nameTokensFr.has(token)) {
+              this.nameTokensFr.set(token, new Set())
+            }
+            this.nameTokensFr.get(token)!.add(student.NODOSS)
+          }
+        })
+      }
+
+      // 3. فهرسة الاسم العربي
+      const nameAr = student.NOM_AR?.trim() || ''
+      if (nameAr) {
+        const nameArLower = nameAr.toLowerCase()
+        if (!this.byNameAr.has(nameArLower)) {
+          this.byNameAr.set(nameArLower, [])
+        }
+        this.byNameAr.get(nameArLower)!.push(student)
+        
+        // رموز الاسم العربي
+        const tokensAr = nameAr.split(/\s+/)
+        tokensAr.forEach((token) => {
+          if (token.length > 1) {
+            const tokenLower = token.toLowerCase()
+            if (!this.nameTokensAr.has(tokenLower)) {
+              this.nameTokensAr.set(tokenLower, new Set())
+            }
+            this.nameTokensAr.get(tokenLower)!.add(student.NODOSS)
+          }
+        })
+      }
     })
   }
 
+  /**
+   * البحث المتقدم
+   * @param query نص البحث (رقم أو اسم)
+   * @returns مصفوفة من الطلاب المطابقين (حد أقصى 20)
+   */
   search(query: string): Student[] {
     const qTrim = query.trim()
     if (!qTrim) return []
@@ -44,16 +80,16 @@ export class SearchIndex {
     const qNum = Number(qTrim)
     const results = new Set<Student>()
 
-    // البحث بالرقم أولاً
-    if (!isNaN(qNum) && qNum !== 0) {
+    // 1. البحث بالرقم (NODOSS)
+    if (!isNaN(qNum) && qNum > 0) {
       const student = this.byId.get(qNum)
       if (student) results.add(student)
     }
 
-    // البحث بالاسم
-    if (isNaN(qNum) || qNum === 0) {
-      // البحث في الرموز المميزة
-      for (const [token, ids] of this.nameTokens) {
+    // 2. البحث بالاسم (فرنسي أو عربي)
+    if (isNaN(qNum) || qNum <= 0) {
+      // أ. البحث في الرموز المميزة (فرنسي)
+      for (const [token, ids] of this.nameTokensFr) {
         if (token.includes(qLow)) {
           ids.forEach((id) => {
             const student = this.byId.get(id)
@@ -61,17 +97,59 @@ export class SearchIndex {
           })
         }
       }
-      // البحث في الأسماء الكاملة
-      for (const [name, students] of this.byName) {
+
+      // ب. البحث في الرموز المميزة (عربي)
+      for (const [token, ids] of this.nameTokensAr) {
+        if (token.includes(qLow)) {
+          ids.forEach((id) => {
+            const student = this.byId.get(id)
+            if (student) results.add(student)
+          })
+        }
+      }
+
+      // ج. البحث في الأسماء الكاملة
+      for (const [name, students] of this.byNameFr) {
+        if (name.includes(qLow)) {
+          students.forEach((student) => results.add(student))
+        }
+      }
+
+      for (const [name, students] of this.byNameAr) {
         if (name.includes(qLow)) {
           students.forEach((student) => results.add(student))
         }
       }
     }
-    return Array.from(results).slice(0, 20) // حد أقصى 20 نتيجة
+
+    // 3. ترتيب النتائج: المطابقات الكاملة أولاً
+    const sorted = Array.from(results)
+    sorted.sort((a, b) => {
+      const aName = (a.NOM_AR || a.NOM_FR).toLowerCase()
+      const bName = (b.NOM_AR || b.NOM_FR).toLowerCase()
+      
+      if (aName === qLow) return -1
+      if (bName === qLow) return 1
+      
+      return aName.localeCompare(bName, 'ar')
+    })
+
+    return sorted.slice(0, 20)
   }
 
+  /**
+   * الحصول على طالب بواسطة رقم الملف
+   * @param id رقم الملف (NODOSS)
+   * @returns الطالب أو null
+   */
   getById(id: number): Student | null {
     return this.byId.get(id) || null
+  }
+
+  /**
+   * الحصول على عدد الطلاب المفهرسين
+   */
+  get count(): number {
+    return this.byId.size
   }
 }
