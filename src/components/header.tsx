@@ -17,24 +17,29 @@ export default function Header() {
     window.location.href = "/"
   }
 
-  const handleSignIn = async () => {
-    // Redirect to Supabase OAuth login page
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: "google", // يمكنك تغيير 'google' إلى أي مزود آخر قمت بتهيئته في Supabase (مثل 'github', 'discord', إلخ.)
-      options: {
-      redirectTo: `${window.location.origin}/auth/callback?next=${window.location.pathname}`,
- // هذا هو المسار الذي سيعيد Supabase التوجيه إليه بعد المصادقة
-      },
-    })
 
-    if (error) {
-      console.error("Error signing in:", error)
-      alert("حدث خطأ أثناء تسجيل الدخول: " + error.message)
-    } else if (data.url) {
-      // إذا كان هناك URL، قم بإعادة توجيه المستخدم إليه لبدء عملية OAuth
-      window.location.href = data.url
-    }
+
+   const handleSignIn = async () => {
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: {
+      redirectTo: "https://twiz-iota.vercel.app/auth/callback",
+    },
+  });
+
+  if (error) {
+    console.error("Error signing in:", error);
+    alert("حدث خطأ أثناء تسجيل الدخول: " + error.message);
+  } else if (data.url) {
+    window.location.href = data.url;
   }
+};
+
+
+
+
+
+
 
   return (
     <header className="sticky top-0 z-40 w-full  no-print">
@@ -46,7 +51,7 @@ export default function Header() {
         </Link>
         <div className="flex items-center gap-2">
           {user ? (
-            <Button variant="ghost" onClick={handleSignOut} className="flex items-center gap-2 text-sm font-medium  bg-white border border-white/30 rounded-full z-40 ">
+            <Button variant="ghost" onClick={handleSignOut} className="flex items-center gap-2 text-sm font-medium  border border-white/30 rounded-full z-40 ">
               <LogOut className="h-6 w-6" />
               <span>تسجيل الخروج</span>
             </Button>
